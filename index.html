@@ -1,0 +1,797 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>貓咪謎題解題器</title>
+<meta name="description" content="截圖匯入、下一步提示、顯示全部貓咪位置的離線解題器">
+<meta name="theme-color" content="#e08a72">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="貓咪解題">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<style>
+  :root {
+    --bg: #f8f2ef;
+    --panel: #ffffff;
+    --text: #5b3f3f;
+    --muted: #9a8580;
+    --line: #eadfdb;
+    --accent: #c0705a;
+    --accent-text: #ffffff;
+    --unassigned: #e4dcd8;
+    --place: #2fbf71;
+    --elim: #e5484d;
+    --shadow: 0 2px 10px rgba(91, 63, 63, .08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #1f1a19; --panel: #2a2422; --text: #f1e4df; --muted: #a8968f;
+      --line: #3d3431; --accent: #e08a72; --accent-text: #1f1a19; --unassigned: #4a403d;
+      --shadow: 0 2px 10px rgba(0, 0, 0, .3);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #1f1a19; --panel: #2a2422; --text: #f1e4df; --muted: #a8968f;
+    --line: #3d3431; --accent: #e08a72; --accent-text: #1f1a19; --unassigned: #4a403d;
+    --shadow: 0 2px 10px rgba(0, 0, 0, .3);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", "PingFang TC", sans-serif;
+    line-height: 1.5;
+  }
+  header { padding: 20px 16px 8px; text-align: center; }
+  header h1 { margin: 0; font-size: 1.5rem; }
+  header p { margin: 4px 0 0; color: var(--muted); font-size: .9rem; }
+  main {
+    display: grid; gap: 16px; padding: 16px; max-width: 1100px; margin: 0 auto;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 380px);
+  }
+  @media (max-width: 860px) { main { grid-template-columns: minmax(0, 1fr); } }
+  .panel { background: var(--panel); border-radius: 16px; padding: 16px; box-shadow: var(--shadow); }
+  .panel h2 { margin: 0 0 10px; font-size: 1.05rem; }
+
+  .tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+  .tabs button { flex: 1; }
+  button {
+    font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text);
+    border-radius: 10px; padding: 8px 12px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary, .tabs button.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+  select, input[type=number] {
+    font: inherit; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--text);
+  }
+  label.check { display: inline-flex; gap: 6px; align-items: center; font-size: .9rem; color: var(--muted); }
+
+  /* 棋盤 */
+  .board-wrap { width: min(100%, 560px); margin: 0 auto; }
+  .board { display: grid; gap: 4px; user-select: none; -webkit-user-select: none; }
+  .board.editing { touch-action: none; }
+  .label { font-size: .75rem; color: var(--muted); display: flex; align-items: center; justify-content: center; }
+  .cell {
+    position: relative; aspect-ratio: 1; border-radius: 6px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: clamp(12px, 4.2vw, 26px); transition: opacity .15s, transform .1s;
+  }
+  .cell:active { transform: scale(.94); }
+  .cell .mark-x { color: rgba(255, 255, 255, .95); font-weight: 700; text-shadow: 0 0 2px rgba(0,0,0,.25); }
+  .cell .ghost { opacity: .5; }
+  .board.hinting .cell:not(.focus):not(.h-place):not(.h-elim):not(.h-mistake) { opacity: .35; }
+  .cell.h-place { box-shadow: 0 0 0 3px var(--panel), 0 0 0 6px var(--place); z-index: 1; animation: pulse 1s infinite alternate; }
+  .cell.h-elim { box-shadow: inset 0 0 0 3px var(--elim); }
+  .cell.h-elim::after { content: "✕"; color: var(--elim); font-weight: 800; position: absolute; opacity: .9; }
+  .cell.h-mistake { box-shadow: 0 0 0 3px var(--panel), 0 0 0 6px var(--elim); z-index: 1; }
+  @keyframes pulse { to { box-shadow: 0 0 0 3px var(--panel), 0 0 0 8px var(--place); } }
+
+  .status { text-align: center; margin: 10px 0 0; font-size: .9rem; color: var(--muted); min-height: 1.5em; }
+  .status.ok { color: var(--place); }
+  .status.err { color: var(--elim); }
+
+  .swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+  .swatch {
+    width: 34px; height: 34px; border-radius: 8px; border: 3px solid transparent; padding: 0;
+    font-size: .7rem; color: rgba(0,0,0,.55); font-weight: 700;
+  }
+  .swatch.active { border-color: var(--text); }
+  .swatch.eraser { background: var(--unassigned); }
+
+  .hint-box {
+    margin-top: 12px; padding: 12px; border-radius: 12px; background: var(--bg);
+    min-height: 64px; font-size: .95rem;
+  }
+  .hint-box .tech { display: inline-block; font-size: .75rem; padding: 1px 8px; border-radius: 99px; background: var(--accent); color: var(--accent-text); margin-bottom: 6px; }
+  .hint-box .muted { color: var(--muted); }
+  .chip { display: inline-block; width: 14px; height: 14px; border-radius: 4px; vertical-align: -2px; margin-right: 3px; border: 1px solid rgba(0,0,0,.15); }
+  .coord { font-variant-numeric: tabular-nums; }
+
+  /* 截圖匯入 */
+  .drop {
+    border: 2px dashed var(--line); border-radius: 12px; padding: 18px; text-align: center;
+    color: var(--muted); cursor: pointer; font-size: .9rem;
+  }
+  .drop.over { border-color: var(--accent); color: var(--text); }
+  #preview {
+    max-width: 100%; max-height: 420px; width: auto; height: auto; display: none;
+    margin: 10px auto 0; border-radius: 8px; touch-action: none;
+  }
+  #preview.selecting { cursor: crosshair; outline: 2px solid var(--accent); }
+  .msg { font-size: .85rem; color: var(--muted); margin-top: 6px; }
+  .msg.err { color: var(--elim); }
+  .help { font-size: .85rem; color: var(--muted); margin: 0; padding-left: 18px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🐱 貓咪謎題解題器</h1>
+  <p>每個色塊、每橫列、每直行各一隻貓，貓咪彼此不能相鄰（含斜角）</p>
+</header>
+
+<main>
+  <section class="panel">
+    <div class="tabs">
+      <button id="tabSolve" class="active">解題</button>
+      <button id="tabEdit">編輯色塊</button>
+    </div>
+
+    <div id="editTools" hidden>
+      <div class="row">
+        <label>大小
+          <select id="sizeSel"></select>
+        </label>
+        <button id="clearRegions">清空色塊</button>
+        <button id="loadExample">載入範例（第 85 關）</button>
+      </div>
+      <div class="row" id="genRow" hidden>
+        <select id="genDiff">
+          <option value="0">任意難度</option>
+          <option value="1">簡單</option>
+          <option value="2">普通</option>
+          <option value="3">困難</option>
+          <option value="4">專家</option>
+        </select>
+        <button id="btnGenerate">🎲 隨機出題（目前大小）</button>
+        <span id="genInfo" class="msg"></span>
+      </div>
+      <div class="swatches" id="swatches"></div>
+      <p class="msg">選一個顏色，再點或拖曳格子上色。</p>
+    </div>
+
+    <div id="solveTools">
+      <div class="row">
+        <button id="btnHint" class="primary">💡 下一步提示</button>
+        <button id="btnApply" disabled>✅ 套用這步</button>
+        <button id="btnAll">🐱 顯示全部貓咪</button>
+        <button id="btnReset">↺ 清除標記</button>
+      </div>
+      <div class="row">
+        <label class="check"><input type="checkbox" id="autoCross" checked> 放貓時自動打叉周圍</label>
+      </div>
+    </div>
+
+    <div class="board-wrap"><div id="board" class="board"></div></div>
+    <div id="status" class="status"></div>
+
+    <div id="hintBox" class="hint-box"><span class="muted">點棋盤可以切換「空白 → ✕ → 🐱」，把遊戲裡已經下的標記同步過來，再按「下一步提示」。</span></div>
+  </section>
+
+  <aside style="display:grid; gap:16px; align-content:start;">
+    <section class="panel">
+      <h2>📷 從截圖匯入</h2>
+      <div class="row">
+        <button id="btnPick" class="primary">🖼️ 選擇截圖</button>
+        <button id="btnPaste">📋 貼上截圖</button>
+      </div>
+      <div id="drop" class="drop">電腦版也可以把圖片拖曳到這裡，或直接 Ctrl+V 貼上</div>
+      <input type="file" id="fileInput" accept="image/*" hidden>
+      <canvas id="preview"></canvas>
+      <div id="importTools" hidden>
+        <div class="row">
+          <label>格數 N <input type="number" id="importN" min="4" max="16" value="10" style="width:64px"></label>
+          <button id="btnFrame">手動框選棋盤</button>
+        </div>
+      </div>
+      <div id="importMsg" class="msg"></div>
+    </section>
+
+    <section class="panel" id="installPanel" hidden>
+      <h2>📲 安裝到手機</h2>
+      <div id="installAndroid" hidden>
+        <button id="btnInstall" class="primary">安裝「貓咪解題」</button>
+        <p class="msg">安裝後可以離線使用。截圖後按「分享」，選「貓咪解題」就會自動辨識。</p>
+      </div>
+      <p id="installIOS" class="msg" hidden>iPhone：用 Safari 開啟本頁 → 按下方「分享」按鈕 → 「加入主畫面」，之後可以離線使用。截圖後從 App 裡按「選擇截圖」，或在截圖編輯畫面按「拷貝」後回來按「貼上截圖」。</p>
+      <p id="installOther" class="msg" hidden>用 Android 的 Chrome 開啟本頁，選單裡選「安裝應用程式」或「加到主畫面」。安裝後截圖分享時就能選到「貓咪解題」。</p>
+    </section>
+
+    <section class="panel">
+      <h2>使用說明</h2>
+      <ul class="help">
+        <li>匯入截圖後會自動找出棋盤、格數和顏色；辨識錯的格子可以到「編輯色塊」修正。</li>
+        <li>自動框得不準時，按「手動框選棋盤」，在圖上拖出棋盤範圍。</li>
+        <li>座標寫法 <b>(列, 行)</b>：列從上往下數、行從左往右數。</li>
+        <li>提示會先說明理由，按「套用這步」才會寫到棋盤上。</li>
+      </ul>
+    </section>
+  </aside>
+</main>
+
+<script src="queens-engine.js"></script>
+<script>
+(() => {
+  'use strict';
+  const E = window.QueensEngine;
+  const PALETTE = ['#9b7bd8', '#aed995', '#d77474', '#e3bb4c', '#a9bfd9', '#4bb5b2', '#fea96b', '#f9b4d2',
+    '#ea86b8', '#6bbbe6', '#c9a27e', '#8fd3c1', '#b8b8b8', '#f2e07a', '#7f9cf5', '#d4a5f9'];
+  const EXAMPLE = {
+    rows: ['PPPGGGGGGG', 'RPRRRRRRRR', 'RPPYYRSSSR', 'RTYYYROSSR', 'RTTYRROSHR',
+      'RKTTROOOHR', 'RKKRRBOHHR', 'RKRRBBBBHR', 'RKRBBBBBHH', 'RRRRRRBBBB'],
+    key: 'PGRYSTOKHB',
+  };
+
+  // ---------- 狀態 ----------
+  let N = 10, regions = [], colors = [], marks = [];
+  let mode = 'solve', selRegion = 0, hint = null, showAll = false;
+  let puzzle = null, solution = null;
+
+  const $ = (id) => document.getElementById(id);
+  const boardEl = $('board');
+
+  function save() {
+    try { localStorage.setItem('queens-solver', JSON.stringify({ N, regions, colors, marks })); } catch (e) { /* 無痕模式等 */ }
+  }
+  function load() {
+    try {
+      const d = JSON.parse(localStorage.getItem('queens-solver'));
+      if (d && d.N && d.regions.length === d.N * d.N) {
+        N = d.N; regions = d.regions; colors = d.colors; marks = d.marks || new Array(N * N).fill(0);
+        return true;
+      }
+    } catch (e) { /* 忽略 */ }
+    return false;
+  }
+  function loadExample() {
+    N = 10;
+    regions = EXAMPLE.rows.join('').split('').map((ch) => EXAMPLE.key.indexOf(ch));
+    colors = PALETTE.slice(0, N);
+    marks = new Array(N * N).fill(0);
+  }
+  function blankBoard(size) {
+    N = size;
+    regions = new Array(N * N).fill(-1);
+    colors = PALETTE.slice(0, N);
+    marks = new Array(N * N).fill(0);
+  }
+
+  function recompute() {
+    hint = null;
+    const err = E.validate(N, regions);
+    const st = $('status');
+    if (err) {
+      puzzle = null; solution = null;
+      st.textContent = err; st.className = 'status err';
+    } else {
+      puzzle = E.create(N, regions);
+      const sols = E.solve(puzzle, null, 2);
+      solution = sols[0] ? new Set(sols[0]) : null;
+      if (!sols.length) { st.textContent = '這個盤面無解，請檢查色塊'; st.className = 'status err'; }
+      else if (sols.length > 1) { st.textContent = '有多組解（題目可能辨識有誤），提示仍可使用'; st.className = 'status err'; }
+      else { st.textContent = '✓ 唯一解'; st.className = 'status ok'; }
+    }
+    updateButtons();
+    save();
+  }
+
+  // ---------- 繪製 ----------
+  function render() {
+    boardEl.style.gridTemplateColumns = `18px repeat(${N}, minmax(0, 1fr))`;
+    boardEl.classList.toggle('editing', mode === 'edit');
+    boardEl.classList.toggle('hinting', !!hint && hint.cells.length > 0);
+    const hc = new Set(hint ? hint.cells : []);
+    const hf = new Set(hint ? hint.focus : []);
+    const cls = hint ? { place: 'h-place', eliminate: 'h-elim', mistake: 'h-mistake' }[hint.kind] : null;
+
+    const frag = document.createDocumentFragment();
+    frag.appendChild(document.createElement('div'));
+    for (let c = 0; c < N; c++) frag.appendChild(labelEl(c + 1));
+    for (let r = 0; r < N; r++) {
+      frag.appendChild(labelEl(r + 1));
+      for (let c = 0; c < N; c++) {
+        const i = r * N + c;
+        const el = document.createElement('div');
+        el.className = 'cell';
+        el.dataset.i = i;
+        el.style.background = regions[i] >= 0 ? colors[regions[i]] : 'var(--unassigned)';
+        if (mode === 'solve') {
+          if (marks[i] === 2) el.textContent = '🐱';
+          else if (showAll && solution && solution.has(i)) el.innerHTML = '<span class="ghost">🐱</span>';
+          else if (marks[i] === 1) el.innerHTML = '<span class="mark-x">✕</span>';
+          if (hc.has(i) && cls) el.classList.add(cls);
+          if (hf.has(i)) el.classList.add('focus');
+        }
+        frag.appendChild(el);
+      }
+    }
+    boardEl.replaceChildren(frag);
+  }
+  function labelEl(t) { const d = document.createElement('div'); d.className = 'label'; d.textContent = t; return d; }
+
+  function renderSwatches() {
+    const box = $('swatches');
+    box.replaceChildren();
+    for (let g = 0; g < N; g++) {
+      const b = document.createElement('button');
+      b.className = 'swatch' + (selRegion === g ? ' active' : '');
+      b.style.background = colors[g];
+      b.textContent = g + 1;
+      b.title = `色塊 ${g + 1}`;
+      b.onclick = () => { selRegion = g; renderSwatches(); };
+      box.appendChild(b);
+    }
+    const er = document.createElement('button');
+    er.className = 'swatch eraser' + (selRegion === -1 ? ' active' : '');
+    er.textContent = '✕';
+    er.title = '清除';
+    er.onclick = () => { selRegion = -1; renderSwatches(); };
+    box.appendChild(er);
+  }
+
+  function updateButtons() {
+    $('btnHint').disabled = !puzzle;
+    $('btnAll').disabled = !solution;
+    $('btnApply').disabled = !hint || !['place', 'eliminate', 'mistake'].includes(hint.kind);
+    $('btnAll').textContent = showAll ? '🙈 隱藏貓咪位置' : '🐱 顯示全部貓咪';
+  }
+
+  function esc(s) { return s.replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch])); }
+
+  function tokenHtml(t) {
+    if (typeof t === 'string') return esc(t);
+    if ('cell' in t) return `<b class="coord">(${Math.floor(t.cell / N) + 1}, ${t.cell % N + 1})</b>`;
+    const u = puzzle.units[t.unit];
+    if (u.type === 'row') return `<b>第 ${u.id + 1} 橫列</b>`;
+    if (u.type === 'col') return `<b>第 ${u.id + 1} 直行</b>`;
+    return `<span class="chip" style="background:${colors[u.id]}"></span><b>色塊</b>`;
+  }
+
+  function showHint() {
+    const box = $('hintBox');
+    if (!hint) return;
+    const action = { place: '→ 這格放貓', eliminate: `→ ${hint.cells.length} 格打叉`, mistake: '→ 清除錯誤標記' }[hint.kind] || '';
+    box.innerHTML = `<span class="tech">${esc(hint.technique)}</span><div>${hint.reason.map(tokenHtml).join('')}</div>` +
+      (action ? `<div class="muted" style="margin-top:4px">${action}</div>` : '');
+  }
+
+  // ---------- 棋盤操作 ----------
+  let painting = false;
+  function cellFromEvent(e) {
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    return el && el.classList.contains('cell') && boardEl.contains(el) ? +el.dataset.i : -1;
+  }
+  function paint(i) {
+    if (i < 0 || regions[i] === selRegion) return;
+    regions[i] = selRegion;
+    const el = boardEl.querySelector(`[data-i="${i}"]`);
+    el.style.background = selRegion >= 0 ? colors[selRegion] : 'var(--unassigned)';
+  }
+  boardEl.addEventListener('pointerdown', (e) => {
+    const i = cellFromEvent(e);
+    if (i < 0) return;
+    if (mode === 'edit') {
+      painting = true;
+      boardEl.setPointerCapture(e.pointerId);
+      paint(i);
+    } else {
+      marks[i] = (marks[i] + 1) % 3;
+      hint = null;
+      $('hintBox').innerHTML = '<span class="muted">標記已更新，按「下一步提示」繼續。</span>';
+      updateButtons(); render(); save();
+    }
+  });
+  boardEl.addEventListener('pointermove', (e) => { if (painting) paint(cellFromEvent(e)); });
+  const endPaint = () => {
+    if (!painting) return;
+    painting = false;
+    marks = new Array(N * N).fill(0);
+    recompute(); render();
+  };
+  boardEl.addEventListener('pointerup', endPaint);
+  boardEl.addEventListener('pointercancel', endPaint);
+
+  // ---------- 按鈕 ----------
+  function setMode(m) {
+    mode = m;
+    hint = null;
+    $('tabSolve').classList.toggle('active', m === 'solve');
+    $('tabEdit').classList.toggle('active', m === 'edit');
+    $('editTools').hidden = m !== 'edit';
+    $('solveTools').hidden = m !== 'solve';
+    $('hintBox').hidden = m !== 'solve';
+    if (m === 'edit') renderSwatches();
+    updateButtons(); render();
+  }
+  $('tabSolve').onclick = () => setMode('solve');
+  $('tabEdit').onclick = () => setMode('edit');
+
+  const sizeSel = $('sizeSel');
+  for (let s = 4; s <= 16; s++) sizeSel.add(new Option(`${s} × ${s}`, s));
+  sizeSel.onchange = () => { blankBoard(+sizeSel.value); selRegion = 0; renderSwatches(); recompute(); render(); };
+  $('clearRegions').onclick = () => { blankBoard(N); renderSwatches(); recompute(); render(); };
+  $('loadExample').onclick = () => { loadExample(); sizeSel.value = N; renderSwatches(); recompute(); render(); };
+  $('btnGenerate').onclick = () => {
+    const size = +sizeSel.value;
+    const lv = window.QueensGenerator.generate({ N: size, difficulty: +$('genDiff').value, maxAttempts: 3000 });
+    if (!lv) { $('genInfo').textContent = '這個難度一時產生不出來，再按一次或換個大小'; return; }
+    N = size;
+    regions = lv.regions;
+    colors = PALETTE.slice(0, N);
+    marks = new Array(N * N).fill(0);
+    const name = window.QueensGenerator.DIFFICULTY.find((d) => d.id === lv.difficulty).name;
+    $('genInfo').textContent = `${name}・${lv.steps} 步・分數 ${lv.score}・seed ${lv.seed}`;
+    renderSwatches(); recompute(); render();
+  };
+
+  $('btnHint').onclick = () => {
+    if (!puzzle) return;
+    hint = E.nextHint(puzzle, marks);
+    showHint(); updateButtons(); render();
+  };
+  $('btnApply').onclick = () => {
+    if (!hint) return;
+    marks = E.applyHint(puzzle, marks, hint, $('autoCross').checked);
+    hint = E.nextHint(puzzle, marks);
+    if (hint.kind === 'solved') {
+      $('hintBox').innerHTML = '<span class="tech">完成</span><div>🎉 全部解開了！</div>';
+      hint = null;
+    } else {
+      // 套用後直接預覽下一步，連續按「套用」就能一路解完
+      showHint();
+    }
+    updateButtons(); render(); save();
+  };
+  $('btnAll').onclick = () => { showAll = !showAll; updateButtons(); render(); };
+  $('btnReset').onclick = () => {
+    marks = new Array(N * N).fill(0); hint = null; showAll = false;
+    $('hintBox').innerHTML = '<span class="muted">標記已清除。</span>';
+    updateButtons(); render(); save();
+  };
+
+  // ---------- 截圖匯入 ----------
+  const preview = $('preview');
+  const pctx = preview.getContext('2d');
+  let img = null, imgData = null, bg = null, rect = null, selecting = false;
+
+  const drop = $('drop');
+  drop.onclick = () => $('fileInput').click();
+  $('btnPick').onclick = () => $('fileInput').click();
+  $('btnPaste').onclick = async () => {
+    try {
+      for (const item of await navigator.clipboard.read()) {
+        const type = item.types.find((t) => t.startsWith('image/'));
+        if (type) { loadFile(await item.getType(type)); return; }
+      }
+      importMsg('剪貼簿裡沒有圖片，請先在截圖畫面按「拷貝」', true);
+    } catch (e) {
+      importMsg('無法讀取剪貼簿，請改用「選擇截圖」', true);
+    }
+  };
+  $('fileInput').onchange = (e) => { if (e.target.files[0]) loadFile(e.target.files[0]); e.target.value = ''; };
+  drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', (e) => {
+    e.preventDefault(); drop.classList.remove('over');
+    const f = [...e.dataTransfer.files].find((x) => x.type.startsWith('image/'));
+    if (f) loadFile(f);
+  });
+  window.addEventListener('paste', (e) => {
+    const item = [...(e.clipboardData || {}).items || []].find((x) => x.type.startsWith('image/'));
+    if (item) loadFile(item.getAsFile());
+  });
+
+  function importMsg(text, isErr) { const m = $('importMsg'); m.textContent = text; m.className = 'msg' + (isErr ? ' err' : ''); }
+
+  function loadFile(file) {
+    const url = URL.createObjectURL(file);
+    const im = new Image();
+    im.onload = () => { URL.revokeObjectURL(url); processImage(im); };
+    im.onerror = () => importMsg('圖片讀取失敗', true);
+    im.src = url;
+  }
+
+  function processImage(im) {
+    const scale = Math.min(1, 1400 / Math.max(im.naturalWidth, im.naturalHeight));
+    const W = Math.round(im.naturalWidth * scale), H = Math.round(im.naturalHeight * scale);
+    preview.width = W; preview.height = H;
+    pctx.drawImage(im, 0, 0, W, H);
+    imgData = pctx.getImageData(0, 0, W, H);
+    img = im;
+    preview.style.display = 'block';
+    $('importTools').hidden = false;
+    bg = estimateBg();
+    const det = detectGrid();
+    if (!det) {
+      rect = null; drawPreview();
+      importMsg('找不到棋盤，請按「手動框選棋盤」，在圖上拖出棋盤範圍。', true);
+      return;
+    }
+    rect = det;
+    const guess = det.nr === det.nc ? det.nr : Math.max(det.nr, det.nc);
+    if (guess >= 4 && guess <= 16) {
+      $('importN').value = guess;
+      applyImport();
+    } else {
+      drawPreview();
+      importMsg('已找到棋盤範圍，但無法判斷格數，請手動輸入 N。', true);
+    }
+  }
+
+  function px(x, y) { const k = (y * imgData.width + x) * 4, d = imgData.data; return [d[k], d[k + 1], d[k + 2]]; }
+
+  // 以圖片四周最常見的顏色當作背景色
+  function estimateBg() {
+    const { width: W, height: H } = imgData;
+    const counts = new Map();
+    const add = (x, y) => {
+      const [r, g, b] = px(x, y);
+      const key = (r >> 4) << 8 | (g >> 4) << 4 | (b >> 4);
+      const e = counts.get(key) || { n: 0, r: 0, g: 0, b: 0 };
+      e.n++; e.r += r; e.g += g; e.b += b; counts.set(key, e);
+    };
+    for (let x = 0; x < W; x += 2) { add(x, 2); add(x, H - 3); }
+    for (let y = 0; y < H; y += 2) { add(2, y); add(W - 3, y); }
+    let best = null;
+    for (const e of counts.values()) if (!best || e.n > best.n) best = e;
+    return [best.r / best.n, best.g / best.n, best.b / best.n];
+  }
+
+  // 是否為「棋盤格」像素：和背景差很多、也不是很暗（格線、貓的黑毛）
+  function isCellPixel(r, g, b) {
+    const dr = r - bg[0], dg = g - bg[1], db = b - bg[2];
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    return dr * dr + dg * dg + db * db > 900 && lum > 90;
+  }
+
+  // 用每列 / 每行的棋盤像素數量找出格子帶，格子之間的空隙就是分界
+  function detectGrid() {
+    const { width: W, height: H } = imgData;
+    const rowScore = new Array(H).fill(0);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const [r, g, b] = px(x, y); if (isCellPixel(r, g, b)) rowScore[y]++; }
+    const rg = bestGroup(bands(rowScore));
+    if (!rg) return null;
+    const y0 = rg[0].start, y1 = rg[rg.length - 1].end + 1;
+
+    const colScore = new Array(W).fill(0);
+    for (let x = 0; x < W; x++) for (let y = y0; y < y1; y++) { const [r, g, b] = px(x, y); if (isCellPixel(r, g, b)) colScore[x]++; }
+    const cg = bestGroup(bands(colScore));
+    if (!cg) return null;
+    const x0 = cg[0].start, x1 = cg[cg.length - 1].end + 1;
+    return { x0, y0, x1, y1, nr: rg.length, nc: cg.length };
+  }
+
+  // 門檻刻意壓低：格子裡的 ✕、貓咪只會讓數量下降一些，格子間的空隙才會接近 0
+  function bands(score) {
+    const thr = 0.2 * Math.max(...score);
+    const out = [];
+    let start = -1;
+    for (let i = 0; i <= score.length; i++) {
+      const on = i < score.length && score[i] >= thr && thr > 0;
+      if (on && start < 0) start = i;
+      if (!on && start >= 0) { if (i - start >= 3) out.push({ start, end: i - 1 }); start = -1; }
+    }
+    return out;
+  }
+
+  // 把大小相近、間距很小的格子帶連成一組，取格子最多的那組
+  function bestGroup(bs) {
+    if (!bs.length) return null;
+    const len = (b) => b.end - b.start + 1;
+    const groups = [[bs[0]]];
+    for (let k = 1; k < bs.length; k++) {
+      const g = groups[groups.length - 1], prev = g[g.length - 1], cur = bs[k];
+      const h1 = len(prev), h2 = len(cur), gap = cur.start - prev.end - 1;
+      const ratio = Math.max(h1, h2) / Math.min(h1, h2);
+      if (gap <= 0.35 * Math.min(h1, h2) && ratio <= 1.35) g.push(cur);
+      else groups.push([cur]);
+    }
+    const total = (g) => g.reduce((s, b) => s + len(b), 0);
+    groups.sort((a, b) => b.length - a.length || total(b) - total(a));
+    return groups[0];
+  }
+
+  // 取每格四個角落附近的顏色（避開中間的 ✕ 和貓咪圖案）
+  function sampleCell(r, c, n) {
+    const cw = (rect.x1 - rect.x0) / n, ch = (rect.y1 - rect.y0) / n;
+    const pts = [[0.2, 0.2], [0.8, 0.2], [0.2, 0.8], [0.8, 0.8]];
+    const good = [], all = [];
+    const half = Math.max(1, Math.round(Math.min(cw, ch) * 0.05));
+    for (const [fx, fy] of pts) {
+      const cx = Math.round(rect.x0 + (c + fx) * cw), cy = Math.round(rect.y0 + (r + fy) * ch);
+      for (let y = cy - half; y <= cy + half; y++) {
+        for (let x = cx - half; x <= cx + half; x++) {
+          if (x < 0 || y < 0 || x >= imgData.width || y >= imgData.height) continue;
+          const p = px(x, y);
+          all.push(p);
+          if (isCellPixel(...p) && Math.min(...p) < 238) good.push(p);
+        }
+      }
+    }
+    const src = good.length >= 5 ? good : all;
+    return [0, 1, 2].map((k) => median(src.map((p) => p[k])));
+  }
+  function median(a) { a.sort((x, y) => x - y); return a[a.length >> 1]; }
+
+  function toLab([r, g, b]) {
+    const lin = (v) => { v /= 255; return v > 0.04045 ? ((v + 0.055) / 1.055) ** 2.4 : v / 12.92; };
+    const R = lin(r), G = lin(g), B = lin(b);
+    const f = (t) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
+    const X = f((R * 0.4124 + G * 0.3576 + B * 0.1805) / 0.95047);
+    const Y = f(R * 0.2126 + G * 0.7152 + B * 0.0722);
+    const Z = f((R * 0.0193 + G * 0.1192 + B * 0.9505) / 1.08883);
+    return [116 * Y - 16, 500 * (X - Y), 200 * (Y - Z)];
+  }
+
+  // 階層式分群：一直合併最接近的兩群，直到剩下 n 群
+  function cluster(rgbs, n) {
+    let cl = rgbs.map((rgb, i) => ({ members: [i], lab: toLab(rgb), rgb: rgb.slice() }));
+    const d2 = (a, b) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
+    while (cl.length > n) {
+      let bi = 0, bj = 1, bd = Infinity;
+      for (let i = 0; i < cl.length; i++) for (let j = i + 1; j < cl.length; j++) {
+        const d = d2(cl[i].lab, cl[j].lab);
+        if (d < bd) { bd = d; bi = i; bj = j; }
+      }
+      const a = cl[bi], b = cl[bj], na = a.members.length, nb = b.members.length;
+      const mix = (x, y) => x.map((v, k) => (v * na + y[k] * nb) / (na + nb));
+      a.lab = mix(a.lab, b.lab); a.rgb = mix(a.rgb, b.rgb);
+      a.members.push(...b.members);
+      cl.splice(bj, 1);
+    }
+    return cl;
+  }
+
+  function applyImport() {
+    const n = +$('importN').value;
+    if (!rect || !(n >= 4 && n <= 16)) return;
+    const rgbs = [];
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) rgbs.push(sampleCell(r, c, n));
+    const cl = cluster(rgbs, n);
+    // 色塊編號依照在棋盤上第一次出現的順序
+    cl.sort((a, b) => Math.min(...a.members) - Math.min(...b.members));
+    const reg = new Array(n * n);
+    cl.forEach((c, g) => c.members.forEach((i) => { reg[i] = g; }));
+    N = n;
+    regions = reg;
+    colors = cl.map((c) => '#' + c.rgb.map((v) => Math.round(v).toString(16).padStart(2, '0')).join(''));
+    marks = new Array(N * N).fill(0);
+    showAll = false;
+    sizeSel.value = N;
+    drawPreview();
+    recompute();
+    setMode('solve');
+    importMsg(solution
+      ? `已匯入 ${N}×${N} 棋盤。` + ($('status').classList.contains('ok') ? '' : '（解不唯一，可能有格子辨識錯誤）')
+      : `已匯入 ${N}×${N}，但目前無解，請到「編輯色塊」檢查顏色。`, !solution);
+    $('hintBox').innerHTML = '<span class="muted">已匯入！按「下一步提示」或「顯示全部貓咪」。</span>';
+    if (innerWidth <= 860) boardEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  function drawPreview() {
+    if (!img) return;
+    pctx.drawImage(img, 0, 0, preview.width, preview.height);
+    if (!rect) return;
+    const n = +$('importN').value || 0;
+    const lw = Math.max(2, preview.width / 300);
+    pctx.lineWidth = lw;
+    pctx.strokeStyle = '#ff2d55';
+    pctx.strokeRect(rect.x0, rect.y0, rect.x1 - rect.x0, rect.y1 - rect.y0);
+    if (n >= 2 && n <= 16) {
+      pctx.lineWidth = lw / 2;
+      pctx.beginPath();
+      for (let k = 1; k < n; k++) {
+        const x = rect.x0 + (rect.x1 - rect.x0) * k / n, y = rect.y0 + (rect.y1 - rect.y0) * k / n;
+        pctx.moveTo(x, rect.y0); pctx.lineTo(x, rect.y1);
+        pctx.moveTo(rect.x0, y); pctx.lineTo(rect.x1, y);
+      }
+      pctx.stroke();
+    }
+  }
+
+  $('importN').addEventListener('change', applyImport);
+  $('btnFrame').onclick = () => {
+    selecting = !selecting;
+    preview.classList.toggle('selecting', selecting);
+    $('btnFrame').textContent = selecting ? '取消框選' : '手動框選棋盤';
+    if (selecting) importMsg('在圖片上從棋盤左上角拖到右下角。');
+  };
+
+  let dragStart = null;
+  function canvasPt(e) {
+    const r = preview.getBoundingClientRect();
+    return [(e.clientX - r.left) * preview.width / r.width, (e.clientY - r.top) * preview.height / r.height];
+  }
+  preview.addEventListener('pointerdown', (e) => {
+    if (!selecting) return;
+    dragStart = canvasPt(e);
+    preview.setPointerCapture(e.pointerId);
+  });
+  preview.addEventListener('pointermove', (e) => {
+    if (!dragStart) return;
+    const [x, y] = canvasPt(e);
+    rect = { x0: Math.min(dragStart[0], x), y0: Math.min(dragStart[1], y), x1: Math.max(dragStart[0], x), y1: Math.max(dragStart[1], y) };
+    drawPreview();
+  });
+  preview.addEventListener('pointerup', () => {
+    if (!dragStart) return;
+    dragStart = null;
+    selecting = false;
+    preview.classList.remove('selecting');
+    $('btnFrame').textContent = '手動框選棋盤';
+    if (rect && rect.x1 - rect.x0 > 20 && rect.y1 - rect.y0 > 20) applyImport();
+  });
+
+  // ---------- PWA：離線、安裝、接收分享 ----------
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  let installPrompt = null;
+  if (!standalone) {
+    $('installPanel').hidden = false;
+    $(isIOS ? 'installIOS' : 'installOther').hidden = false;
+  }
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    installPrompt = e;
+    $('installOther').hidden = true;
+    $('installAndroid').hidden = false;
+  });
+  $('btnInstall').onclick = async () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    await installPrompt.userChoice;
+    installPrompt = null;
+    $('installAndroid').hidden = true;
+  };
+  window.addEventListener('appinstalled', () => { $('installPanel').hidden = true; });
+
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => { /* 不支援時仍可線上使用 */ });
+
+  // Android 分享選單送來的圖片：sw.js 先存進快取，再轉址到 ?shared=1
+  async function receiveShared() {
+    if (!new URLSearchParams(location.search).has('shared')) return;
+    history.replaceState(null, '', location.pathname);
+    try {
+      const cache = await caches.open('shared-image');
+      const res = await cache.match('shared-image');
+      if (!res) { importMsg('沒有收到分享的圖片，請改用「選擇截圖」', true); return; }
+      await cache.delete('shared-image');
+      loadFile(await res.blob());
+    } catch (e) {
+      importMsg('讀取分享的圖片失敗，請改用「選擇截圖」', true);
+    }
+  }
+
+  // 本機開發時才載入關卡產生器（tools/ 不會部署到網路上）
+  if (['localhost', '127.0.0.1'].includes(location.hostname)) {
+    const sc = document.createElement('script');
+    sc.src = '../tools/queens-generator.js';
+    sc.onload = () => { $('genRow').hidden = false; };
+    document.body.appendChild(sc);
+  }
+
+  // ---------- 啟動 ----------
+  if (!load()) loadExample();
+  sizeSel.value = N;
+  recompute();
+  setMode('solve');
+  receiveShared();
+})();
+</script>
+</body>
+</html>
