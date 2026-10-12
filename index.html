@@ -779,10 +779,10 @@
     }
   }
 
-  // 本機開發時才載入關卡產生器（tools/ 不會部署到網路上）
+  // 本機開發時才載入關卡產生器（在私人的 game repo 裡，不會部署到網路上）
   if (['localhost', '127.0.0.1'].includes(location.hostname)) {
     const sc = document.createElement('script');
-    sc.src = '../tools/queens-generator.js';
+    sc.src = '../game/tools/queens-generator.js';
     sc.onload = () => { $('genRow').hidden = false; };
     document.body.appendChild(sc);
   }
