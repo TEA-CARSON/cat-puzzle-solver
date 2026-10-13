@@ -1,0 +1,13 @@
+# 統一使用 LF 換行，避免 Windows 的 core.autocrlf 造成「已修改」的假象
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.apk binary
+*.jar binary
+*.keystore binary
+*.jks binary
