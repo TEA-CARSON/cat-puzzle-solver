@@ -110,6 +110,8 @@
   }
   .hint-box .tech { display: inline-block; font-size: .75rem; padding: 1px 8px; border-radius: 99px; background: var(--accent); color: var(--accent-text); margin-bottom: 6px; }
   .hint-box .muted { color: var(--muted); }
+  .hint-box .reason { white-space: pre-line; line-height: 1.6; }
+  .hint-box .fold summary { color: var(--muted); cursor: pointer; }
   .chip { display: inline-block; width: 14px; height: 14px; border-radius: 4px; vertical-align: -2px; margin-right: 3px; border: 1px solid rgba(0,0,0,.15); }
   .coord { font-variant-numeric: tabular-nums; }
 
@@ -355,6 +357,7 @@
 
   function tokenHtml(t) {
     if (typeof t === 'string') return esc(t);
+    if ('fold' in t) return `<details class="fold"><summary>${esc(t.summary)}</summary>${t.fold.map(tokenHtml).join('')}</details>`;
     if ('cell' in t) return `<b class="coord">(${Math.floor(t.cell / N) + 1}, ${t.cell % N + 1})</b>`;
     const u = puzzle.units[t.unit];
     if (u.type === 'row') return `<b>第 ${u.id + 1} 橫列</b>`;
@@ -365,9 +368,8 @@
   function showHint() {
     const box = $('hintBox');
     if (!hint) return;
-    const action = { place: '→ 這格放貓', eliminate: `→ ${hint.cells.length} 格打叉`, mistake: '→ 清除錯誤標記' }[hint.kind] || '';
-    box.innerHTML = `<span class="tech">${esc(hint.technique)}</span><div>${hint.reason.map(tokenHtml).join('')}</div>` +
-      (action ? `<div class="muted" style="margin-top:4px">${action}</div>` : '');
+    // 結論（放貓／打叉哪幾格）已經寫在 reason 的最後一行
+    box.innerHTML = `<span class="tech">${esc(hint.technique)}</span><div class="reason">${hint.reason.map(tokenHtml).join('')}</div>`;
   }
 
   // ---------- 棋盤操作 ----------

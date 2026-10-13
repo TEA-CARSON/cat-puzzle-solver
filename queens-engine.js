@@ -126,14 +126,57 @@
 
   // level：這一步推理的難度，產生器用來評估關卡難度（0 = 機械性步驟、10 = 推理不出來）
   const TECH_LEVEL = {
-    '貓咪排除': 0, '唯一位置': 1, '區域鎖定': 2, '共同排除': 3,
-    '區域鎖定（2 組）': 4, '區域鎖定（3 組）': 5, '假設排除': 6, '假設推演': 7, '區域鎖定（4 組）': 7,
-    '直接揭示': 10,
+    catElim: 0, single: 1, confine1: 2, shared: 3, confine2: 4, confine3: 5,
+    tryOne: 6, tryChain: 7, confine4: 7, reveal: 10,
   };
 
-  function hint(kind, technique, cells, focus, reason) {
-    return { kind, technique, level: TECH_LEVEL[technique] || 0, cells, focus: focus || [], reason };
+  // 顯示給玩家看的技巧名稱（白話）；區域鎖定依單位種類另外組名稱
+  const TECH_LABEL = {
+    catElim: '放貓後打叉', single: '只剩一格', shared: '怎麼放都擋到',
+    tryOne: '試放看看', tryChain: '試放連鎖推演', reveal: '直接揭曉',
+    mistake: '標記錯誤', nosolution: '無解', solved: '完成',
+  };
+
+  // reason 是 token 陣列：字串（'\n' 代表換行）、{ cell }、{ unit }、{ fold, summary }（可展開的摺疊區塊）
+  function hint(kind, id, cells, focus, reason, label) {
+    return { kind, id, technique: label || TECH_LABEL[id], level: TECH_LEVEL[id] || 0, cells, focus: focus || [], reason };
   }
+
+  function joinCells(cells) {
+    const out = [];
+    cells.forEach((c, idx) => { if (idx) out.push('、'); out.push({ cell: c }); });
+    return out;
+  }
+
+  // i 放貓為什麼會排除 j：同橫列／直行優先，其次同色塊，都不是就一定是斜角相鄰
+  const RELATIONS = ['row', 'col', 'region', 'diag'];
+  const RELATION_TEXT = {
+    row: ' 跟它在同一橫列', col: ' 跟它在同一直行', region: ' 跟它在同一個色塊', diag: ' 是它的斜角鄰格',
+  };
+  function relation(p, i, j) {
+    if (p.row[i] === p.row[j]) return 'row';
+    if (p.col[i] === p.col[j]) return 'col';
+    if (p.regions[i] === p.regions[j]) return 'region';
+    return 'diag';
+  }
+
+  // 說明 i 放貓時，targets 各自是因為什麼關係被排除；key 用來合併說法相同的候選格
+  function describeAttack(p, i, targets) {
+    const tokens = [];
+    const key = [];
+    for (const rel of RELATIONS) {
+      const group = targets.filter((j) => relation(p, i, j) === rel);
+      if (!group.length) continue;
+      if (tokens.length) tokens.push('，');
+      tokens.push(...joinCells(group), RELATION_TEXT[rel]);
+      key.push(rel + ':' + group.join(','));
+    }
+    return { tokens, key: key.join('|') };
+  }
+
+  const CIRCLED = '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳';
+  const stepNo = (k) => (k <= CIRCLED.length ? CIRCLED[k - 1] : `${k}.`) + ' ';
+  const FOLD_AFTER = 4; // 推演超過幾步就把中間摺疊起來
 
   // ---- 推理技巧 ----
 
@@ -143,8 +186,9 @@
       if (state[i] !== CAT) continue;
       const elim = p.attacks[i].filter((j) => state[j] === EMPTY);
       if (elim.length) {
-        return hint('eliminate', '貓咪排除', elim, [i],
-          ['貓咪在 ', { cell: i }, '，同一橫列、直行、色塊，以及周圍 8 格都不能再放貓']);
+        return hint('eliminate', 'catElim', elim, [i],
+          ['貓咪在 ', { cell: i }, '，同一橫列、直行、色塊，以及周圍 8 格都不能再放貓',
+            `\n→ 這些格子打叉（共 ${elim.length} 格）`]);
       }
     }
     return null;
@@ -155,8 +199,8 @@
     for (const u of unitOrder(p)) {
       if (info[u].cat < 0 && info[u].cands.length === 1) {
         const i = info[u].cands[0];
-        return hint('place', '唯一位置', [i], p.units[u].cells,
-          [{ unit: u }, ' 只剩這一格可以放貓']);
+        return hint('place', 'single', [i], p.units[u].cells,
+          [{ unit: u }, ' 只剩 ', { cell: i }, ' 這一格可以放貓', '\n→ 放貓']);
       }
     }
     return null;
@@ -202,15 +246,22 @@
           const bUnits = [];
           for (let b = 0; b < N; b++) if (mask & (1 << b)) bUnits.push(bBase + b);
           const focus = aUnits.flatMap((u) => info[u].cands);
-          let reason;
+          const TA = TYPE_NAME[ta], TB = TYPE_NAME[tb];
+          const total = elim.length > 2 ? `（共 ${elim.length} 格）` : '';
+          let reason, label;
           if (k === 1) {
-            reason = [{ unit: aUnits[0] }, ' 能放貓的格子全都在 ', { unit: bUnits[0] }, ' 裡 → ',
-              { unit: bUnits[0] }, ' 的貓一定屬於它，其餘格子打叉'];
+            label = `${TA}包下整個${TB}`;
+            reason = [{ unit: aUnits[0] }, ' 能放貓的格子全都在 ', { unit: bUnits[0] }, ' 裡',
+              '\n→ ', { unit: bUnits[0] }, ' 的貓一定是 ', { unit: aUnits[0] }, ' 的那一隻',
+              '\n→ 打叉：', { unit: bUnits[0] }, ' 裡其他的格子 ', ...joinCells(elim), total];
           } else {
-            reason = [...joinTokens(aUnits), ` 這 ${k} 個${TYPE_NAME[ta]}能放貓的格子，全都落在 `,
-              ...joinTokens(bUnits), ` 這 ${k} 個${TYPE_NAME[tb]}內 → 這些${TYPE_NAME[tb]}的貓已被它們佔滿，其餘格子打叉`];
+            label = `${k} 個${TA}包下 ${k} 個${TB}`;
+            reason = [...joinTokens(aUnits), ` 這 ${k} 個${TA}能放貓的格子，全都在 `,
+              ...joinTokens(bUnits), ` 這 ${k} 個${TB}裡`,
+              `\n→ 這 ${k} 個${TB}的 ${k} 隻貓會被它們佔滿`,
+              `\n→ 打叉：這些${TB}裡其他${TA}的格子 `, ...joinCells(elim), total];
           }
-          found = hint('eliminate', k === 1 ? '區域鎖定' : `區域鎖定（${k} 組）`, elim, focus, reason);
+          found = hint('eliminate', `confine${k}`, elim, focus, reason, label);
           return;
         }
         for (let x = start; x < As.length; x++) {
@@ -237,50 +288,120 @@
       const elim = [];
       for (let j = 0; j < p.n; j++) if (count[j] === cands.length && state[j] === EMPTY) elim.push(j);
       if (elim.length) {
-        return hint('eliminate', '共同排除', elim, cands,
-          ['不論 ', { unit: u }, ' 的貓放在哪一格，都會排除這些格子 → 打叉']);
+        // 每個候選格各自說明為什麼會排除這些格子，說法相同的合併成一行
+        const groups = new Map();
+        for (const c of cands) {
+          const d = describeAttack(p, c, elim);
+          if (!groups.has(d.key)) groups.set(d.key, { cands: [], tokens: d.tokens });
+          groups.get(d.key).cands.push(c);
+        }
+        const reason = [{ unit: u }, ' 的貓只能放在 ', ...joinCells(cands), '，不管放哪一格，',
+          ...joinCells(elim), ' 都會被排除：'];
+        for (const g of groups.values()) reason.push('\n・放 ', ...joinCells(g.cands), '：', ...g.tokens);
+        reason.push('\n→ 打叉：', ...joinCells(elim));
+        return hint('eliminate', 'shared', elim, cands, reason);
       }
     }
     return null;
   }
 
-  // 假設某格放貓並往下推；回傳變成無處可放的單位，沒有矛盾則回傳 -1
-  function propagate(p, s, deep) {
+  function placeCat(p, s, i) {
+    s[i] = CAT;
+    for (const j of p.attacks[i]) if (s[j] === EMPTY) s[j] = CROSS;
+  }
+
+  function emptyUnit(p, s, order) {
+    const info = analyze(p, s);
+    for (const u of order) if (info[u].cat < 0 && info[u].cands.length === 0) return u;
+    return -1;
+  }
+
+  // 假設 i 放貓並往下推。deep 為 false 時只看這隻貓直接排除的格子；
+  // 為 true 時持續把「只剩一格」的單位放貓（只用強制步驟，不做窮舉）。
+  // 回傳 { unit, steps }：unit 為變成無處可放的單位，steps 為依序放下的貓 [{ unit, cell }]；沒有矛盾回傳 null
+  function propagate(p, state, i, deep, order) {
+    const s = Array.from(state);
+    const steps = [];
+    placeCat(p, s, i);
     for (;;) {
-      for (let i = 0; i < p.n; i++) {
-        if (s[i] !== CAT) continue;
-        for (const j of p.attacks[i]) {
-          if (s[j] === CAT) return unitOf(p, 'row', i); // 兩貓衝突
-          if (s[j] === EMPTY) s[j] = CROSS;
-        }
-      }
+      const u = emptyUnit(p, s, order);
+      if (u >= 0) return { unit: u, steps };
+      if (!deep) return null;
       const info = analyze(p, s);
-      for (let u = 0; u < info.length; u++) if (info[u].cat < 0 && info[u].cands.length === 0) return u;
-      if (!deep) return -1;
-      let placed = false;
-      for (let u = 0; u < info.length; u++) {
-        if (info[u].cat < 0 && info[u].cands.length === 1) { s[info[u].cands[0]] = CAT; placed = true; break; }
-      }
-      if (!placed) return -1;
+      const v = order.find((w) => info[w].cat < 0 && info[w].cands.length === 1);
+      if (v === undefined) return null;
+      steps.push({ unit: v, cell: info[v].cands[0] });
+      placeCat(p, s, info[v].cands[0]);
     }
   }
 
-  function hypothesis(p, state) {
-    for (const deep of [false, true]) {
-      for (let i = 0; i < p.n; i++) {
-        if (state[i] !== EMPTY) continue;
-        const s = Array.from(state);
-        s[i] = CAT;
-        const u = propagate(p, s, deep);
-        if (u >= 0) {
-          const reason = deep
-            ? ['假設 ', { cell: i }, ' 放貓，一路推下去會讓 ', { unit: u }, ' 沒有任何格子可以放 → 這格打叉']
-            : ['假設 ', { cell: i }, ' 放貓，會把 ', { unit: u }, ' 剩下的格子全部排除 → 這格打叉'];
-          return hint('eliminate', deep ? '假設推演' : '假設排除', [i], p.units[u].cells, reason);
-        }
-      }
+  // 依序重播推演步驟，確認每一步都還是「只剩一格」；成功回傳最後無處可放的單位，否則 -1
+  function replay(p, state, i, steps, order) {
+    const s = Array.from(state);
+    placeCat(p, s, i);
+    for (const st of steps) {
+      const { cat, cands } = analyze(p, s)[st.unit];
+      if (cat >= 0 || cands.length !== 1 || cands[0] !== st.cell) return -1;
+      placeCat(p, s, st.cell);
     }
-    return null;
+    return emptyUnit(p, s, order);
+  }
+
+  // 拿掉跟矛盾無關的步驟，讓說明只留下必要的推演
+  function trimSteps(p, state, i, res, order) {
+    let { unit, steps } = res;
+    for (let k = steps.length - 1; k >= 0; k--) {
+      const rest = steps.slice(0, k).concat(steps.slice(k + 1));
+      const u = replay(p, state, i, rest, order);
+      if (u >= 0) { steps = rest; unit = u; }
+    }
+    return { unit, steps };
+  }
+
+  function hypothesis(p, state, deep) {
+    const order = unitOrder(p);
+    let best = null, bestCell = -1;
+    for (let i = 0; i < p.n; i++) {
+      if (state[i] !== EMPTY) continue;
+      let res = propagate(p, state, i, deep, order);
+      if (!res) continue;
+      if (!deep) { best = res; bestCell = i; break; }
+      res = trimSteps(p, state, i, res, order);
+      // 挑推演最短的那一格，玩家比較容易看懂
+      if (!best || res.steps.length < best.steps.length) { best = res; bestCell = i; }
+      if (best.steps.length <= 1) break;
+    }
+    if (!best) return null;
+
+    const i = bestCell, u = best.unit;
+    if (!deep) {
+      const info = analyze(p, state);
+      const { tokens } = describeAttack(p, i, info[u].cands);
+      return hint('eliminate', 'tryOne', [i], p.units[u].cells, [
+        '先試著在 ', { cell: i }, ' 放貓：',
+        '\n', { unit: u }, ' 剩下的格子全被它排除（', ...tokens, '）',
+        '\n→ ', { unit: u }, ' 沒地方放貓，所以 ', { cell: i }, ' 不能放貓 → 打叉',
+      ]);
+    }
+
+    // 推演鏈：每一步一行，最後一步是無處可放的單位
+    const lines = best.steps.map((st) => [{ unit: st.unit }, ' 只剩 ', { cell: st.cell }, ' 能放 → 放貓']);
+    lines.push([{ unit: u }, ' 所有格子都被排除了，沒地方放貓 ✗']);
+    lines.forEach((line, k) => line.unshift(stepNo(k + 1)));
+    const joinLines = (ls) => ls.flatMap((l, k) => (k ? ['\n', ...l] : l));
+
+    const reason = ['先試著在 ', { cell: i }, ' 放貓，看看會發生什麼事：', '\n'];
+    if (lines.length > FOLD_AFTER) {
+      const middle = lines.slice(1, -1);
+      reason.push(...lines[0],
+        { fold: joinLines(middle), summary: `展開中間 ${middle.length} 步（共 ${lines.length} 步）` },
+        ...lines[lines.length - 1]);
+    } else {
+      reason.push(...joinLines(lines));
+    }
+    reason.push('\n→ 產生矛盾，所以 ', { cell: i }, ' 不能放貓 → 打叉');
+    const focus = p.units[u].cells.concat(best.steps.map((st) => st.cell));
+    return hint('eliminate', 'tryChain', [i], focus, reason);
   }
 
   // ---- 主要入口 ----
@@ -291,7 +412,7 @@
       if (state[i] !== CAT) continue;
       for (const j of p.attacks[i]) {
         if (j > i && state[j] === CAT) {
-          return hint('mistake', '標記錯誤', [i, j], [],
+          return hint('mistake', 'mistake', [i, j], [],
             [{ cell: i }, ' 和 ', { cell: j }, ' 兩隻貓互相衝突（同列、同行、同色塊或相鄰）']);
         }
       }
@@ -299,18 +420,18 @@
 
     if (!solve(p, state, 1).length) {
       const base = solve(p, null, 1);
-      if (!base.length) return hint('nosolution', '無解', [], [], ['這個盤面無解，請檢查色塊是否正確']);
+      if (!base.length) return hint('nosolution', 'nosolution', [], [], ['這個盤面無解，請檢查色塊是否正確']);
       const sol = new Set(base[0]);
       const wrong = [];
       for (let i = 0; i < p.n; i++) {
         if ((state[i] === CAT && !sol.has(i)) || (state[i] === CROSS && sol.has(i))) wrong.push(i);
       }
-      return hint('mistake', '標記錯誤', wrong, [], ['這些標記和正解不符，套用後會清除它們']);
+      return hint('mistake', 'mistake', wrong, [], ['這些標記和正解不符，套用後會清除它們']);
     }
 
     let cats = 0;
     for (let i = 0; i < p.n; i++) if (state[i] === CAT) cats++;
-    if (cats === p.N) return hint('solved', '完成', [], [], ['已經全部解開了！']);
+    if (cats === p.N) return hint('solved', 'solved', [], [], ['已經全部解開了！']);
 
     const info = analyze(p, state);
     const found =
@@ -320,8 +441,9 @@
       sharedAttack(p, state, info) ||
       confinement(p, state, info, 2) ||
       confinement(p, state, info, 3) ||
-      hypothesis(p, state) ||
-      confinement(p, state, info, 4);
+      hypothesis(p, state, false) ||
+      confinement(p, state, info, 4) || // 比連鎖推演直觀，所以先找
+      hypothesis(p, state, true);
     if (found) return found;
 
     // 都找不到：從正解直接揭示一格（挑候選最少的色塊）
@@ -332,8 +454,8 @@
       const cnt = info[unitOf(p, 'region', i)].cands.length;
       if (cnt < bestCount) { best = i; bestCount = cnt; }
     }
-    return hint('place', '直接揭示', [best], [],
-      ['這一步需要更進階的推理，直接揭示：', { cell: best }, ' 是貓咪']);
+    return hint('place', 'reveal', [best], [],
+      ['這一步需要更進階的推理，直接揭曉：', { cell: best }, ' 是貓咪']);
   }
 
   // 套用提示，回傳新的 state；autoCross 為 true 時放貓會自動排除周圍
