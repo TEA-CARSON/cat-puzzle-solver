@@ -127,13 +127,13 @@
   // level：這一步推理的難度，產生器用來評估關卡難度（0 = 機械性步驟、10 = 推理不出來）
   const TECH_LEVEL = {
     catElim: 0, single: 1, confine1: 2, shared: 3, confine2: 4, confine3: 5,
-    tryOne: 6, tryChain: 7, confine4: 7, reveal: 10,
+    tryOne: 6, tryChain: 7, confine4: 7, tryUnit: 7, reveal: 10,
   };
 
   // 顯示給玩家看的技巧名稱（白話）；區域鎖定依單位種類另外組名稱
   const TECH_LABEL = {
     catElim: '放貓後打叉', single: '只剩一格', shared: '怎麼放都擋到',
-    tryOne: '試放看看', tryChain: '試放連鎖推演', reveal: '直接揭曉',
+    tryOne: '試放看看', tryChain: '試放連鎖推演', tryUnit: '逐格試放', reveal: '直接揭曉',
     mistake: '標記錯誤', nosolution: '無解', solved: '完成',
   };
 
@@ -212,7 +212,8 @@
     ['col', 'region'], ['row', 'col'], ['col', 'row'],
   ];
 
-  function confinement(p, state, info, k) {
+  // out 有傳陣列時：收集所有成立的組合（提示挑選用）；沒傳時找到第一個就回傳
+  function confinement(p, state, info, k, out) {
     const N = p.N;
     for (const [ta, tb] of CONFINE_PAIRS) {
       const base = ta === 'row' ? 0 : ta === 'col' ? N : 2 * N;
@@ -261,7 +262,8 @@
               `\n→ 這 ${k} 個${TB}的 ${k} 隻貓會被它們佔滿`,
               `\n→ 打叉：這些${TB}裡其他${TA}的格子 `, ...joinCells(elim), total];
           }
-          found = hint('eliminate', `confine${k}`, elim, focus, reason, label);
+          const h = hint('eliminate', `confine${k}`, elim, focus, reason, label);
+          if (out) out.push(h); else found = h;
           return;
         }
         for (let x = start; x < As.length; x++) {
@@ -279,7 +281,7 @@
   }
 
   // 不論某單位的貓放哪一格，都會排除的格子
-  function sharedAttack(p, state, info) {
+  function sharedAttack(p, state, info, out) {
     for (const u of unitOrder(p)) {
       const cands = info[u].cands;
       if (info[u].cat >= 0 || cands.length < 2) continue;
@@ -299,7 +301,8 @@
           ...joinCells(elim), ' 都會被排除：'];
         for (const g of groups.values()) reason.push('\n・放 ', ...joinCells(g.cands), '：', ...g.tokens);
         reason.push('\n→ 打叉：', ...joinCells(elim));
-        return hint('eliminate', 'shared', elim, cands, reason);
+        const h = hint('eliminate', 'shared', elim, cands, reason);
+        if (out) out.push(h); else return h;
       }
     }
     return null;
@@ -406,7 +409,8 @@
 
   // ---- 主要入口 ----
 
-  function nextHint(p, state) {
+  // 標記錯誤、無解、已完成；都不是回傳 null
+  function precheck(p, state) {
     // 貓咪彼此衝突
     for (let i = 0; i < p.n; i++) {
       if (state[i] !== CAT) continue;
@@ -432,21 +436,11 @@
     let cats = 0;
     for (let i = 0; i < p.n; i++) if (state[i] === CAT) cats++;
     if (cats === p.N) return hint('solved', 'solved', [], [], ['已經全部解開了！']);
+    return null;
+  }
 
-    const info = analyze(p, state);
-    const found =
-      catConsequences(p, state) ||
-      singles(p, state, info) ||
-      confinement(p, state, info, 1) ||
-      sharedAttack(p, state, info) ||
-      confinement(p, state, info, 2) ||
-      confinement(p, state, info, 3) ||
-      hypothesis(p, state, false) ||
-      confinement(p, state, info, 4) || // 比連鎖推演直觀，所以先找
-      hypothesis(p, state, true);
-    if (found) return found;
-
-    // 都找不到：從正解直接揭示一格（挑候選最少的色塊）
+  // 都找不到：從正解直接揭示一格（挑候選最少的色塊）
+  function reveal(p, state, info) {
     const sol = solve(p, state, 1)[0];
     let best = -1, bestCount = Infinity;
     for (const i of sol) {
@@ -458,9 +452,179 @@
       ['這一步需要更進階的推理，直接揭曉：', { cell: best }, ' 是貓咪']);
   }
 
+  // 依難度由簡到難，找第一個能用的步驟。產生器用它評估關卡難度（每一步的 level ＝ 需要的技巧）
+  function nextHintByLevel(p, state) {
+    const chk = precheck(p, state);
+    if (chk) return chk;
+    const info = analyze(p, state);
+    return catConsequences(p, state) ||
+      singles(p, state, info) ||
+      confinement(p, state, info, 1) ||
+      sharedAttack(p, state, info) ||
+      confinement(p, state, info, 2) ||
+      confinement(p, state, info, 3) ||
+      hypothesis(p, state, false) ||
+      confinement(p, state, info, 4) || // 比連鎖推演直觀，所以先找
+      hypothesis(p, state, true) ||
+      reveal(p, state, info);
+  }
+
+  // ---- 給玩家的提示：挑「最快找到下一隻貓」的那一步 ----
+  // 原本按難度排隊，常常先給只排除一兩格的小步驟，真正的突破口要等很多次提示才出現。
+  // 現在列出所有中低難度步驟，每一步都試套用並往後推幾步，挑「離下一隻貓最近」的；一樣近就挑比較簡單的。
+  const LOOKAHEAD = 3;
+
+  // 已放的貓周圍全部打叉（機械性步驟，提示時順便處理，不另外算一次）
+  function crossAround(p, state) {
+    const s = Array.from(state), pre = [];
+    for (let i = 0; i < p.n; i++) {
+      if (state[i] !== CAT) continue;
+      for (const j of p.attacks[i]) if (s[j] === EMPTY) { s[j] = CROSS; pre.push(j); }
+    }
+    return { s, pre };
+  }
+  function firstSingle(p, s) {
+    const info = analyze(p, s);
+    for (const u of unitOrder(p)) if (info[u].cat < 0 && info[u].cands.length === 1) return { unit: u, cell: info[u].cands[0] };
+    return null;
+  }
+  function crossCells(s, cells) {
+    const t = Array.from(s);
+    for (const i of cells) t[i] = CROSS;
+    return t;
+  }
+  const cellsKey = (cells) => cells.slice().sort((a, b) => a - b).join(',');
+
+  // 中低難度的所有步驟；已經有「只剩一格」就直接回傳那一步（馬上就能放貓）
+  function candidates(p, s) {
+    const info = analyze(p, s);
+    const single = singles(p, s, info);
+    if (single) return [single];
+    const out = [];
+    confinement(p, s, info, 1, out);
+    sharedAttack(p, s, info, out);
+    confinement(p, s, info, 2, out);
+    confinement(p, s, info, 3, out);
+    const seen = new Set(); // 打叉格完全相同的只留第一個（最簡單的說法）
+    return out.filter((h) => { const k = cellsKey(h.cells); if (seen.has(k)) return false; seen.add(k); return true; });
+  }
+
+  // 從 s 出發用貪婪方式往後推（能直接造出「只剩一格」的步驟優先，否則挑打叉最多的），回傳離下一隻貓還有幾步
+  function stepsToCat(p, s, depth) {
+    let cur = s;
+    for (let d = 0; d <= depth; d++) {
+      if (firstSingle(p, cur)) return d;
+      if (d === depth) break;
+      const cs = candidates(p, cur);
+      if (!cs.length) break;
+      let next = null, bestScore = -1;
+      for (const c of cs) {
+        const t = crossCells(cur, c.cells);
+        const score = (firstSingle(p, t) ? 1000 : 0) + c.cells.length;
+        if (score > bestScore) { bestScore = score; next = t; }
+      }
+      cur = next;
+    }
+    return Infinity;
+  }
+
+  // 依序比較，第一個不同的值較小者為小
+  function lexLess(a, b) {
+    for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return a[k] < b[k];
+    return false;
+  }
+
+  // 還沒放貓的單位中，候選格最少有幾格（越少代表越接近找到貓）
+  function minOpen(p, s) {
+    let m = Infinity;
+    for (const { cat, cands } of analyze(p, s)) if (cat < 0) m = Math.min(m, cands.length);
+    return m;
+  }
+
+  // 逐格試放：把某個單位的每個候選格都試放並推演，會矛盾的全部排除。
+  // 只剩一格沒矛盾 → 直接放貓（一次提示就找到一隻）；否則一次排除多格。
+  // 取代「一次只排除一格」的試放提示，難關時不會連續好幾次提示都沒進展。回傳每個單位各一個提示
+  function unitTrials(p, s) {
+    const order = unitOrder(p), info = analyze(p, s), out = [];
+    for (const u of order) {
+      const { cat, cands } = info[u];
+      if (cat >= 0 || cands.length < 2) continue;
+      const bad = [], ok = [];
+      for (const i of cands) {
+        const r = propagate(p, s, i, true, order);
+        if (r) bad.push({ i, ...trimSteps(p, s, i, r, order) }); else ok.push(i);
+      }
+      if (!bad.length) continue;
+      const reason = [{ unit: u }, ' 還剩 ', ...joinCells(cands), ' 可以放貓，逐一試放看看：'];
+      const lines = bad.map((b) => ['\n✗ 試放 ', { cell: b.i }, ' → ',
+        ...(b.steps.length ? [`連鎖推演 ${b.steps.length} 步後，`] : []), { unit: b.unit }, ' 沒地方放貓']);
+      // 試放太多格時只先列 2 格，其餘摺疊起來，手機上才不會一大段
+      if (lines.length > FOLD_AFTER) {
+        reason.push(...lines[0], ...lines[1], { fold: lines.slice(2).flat(), summary: `展開其餘 ${lines.length - 2} 個試放` });
+      } else {
+        reason.push(...lines.flat());
+      }
+      if (ok.length === 1) {
+        reason.push('\n→ 只剩 ', { cell: ok[0] }, ' 不會矛盾 → 放貓');
+        out.push(hint('place', 'tryUnit', [ok[0]], cands, reason));
+      } else {
+        reason.push('\n→ 這些試放會矛盾的格子打叉');
+        out.push(hint('eliminate', 'tryUnit', bad.map((b) => b.i), cands, reason));
+      }
+    }
+    return out;
+  }
+
+  // 從一組候選步驟挑最好的：幾次提示找到貓 → （找不到時）最接近只剩一格 → 難度 → 打叉格數
+  function bestOf(p, s, cs) {
+    let best = null;
+    for (const c of cs) {
+      let key, t = null;
+      if (c.kind === 'place') key = [1, 0, c.level, 0];
+      else {
+        t = crossCells(s, c.cells);
+        const steps = 1 + stepsToCat(p, t, LOOKAHEAD);
+        key = [steps, steps === Infinity ? minOpen(p, t) : 0, c.level, -c.cells.length];
+      }
+      if (!best || lexLess(key, best.key)) best = { c, key, t };
+    }
+    return best;
+  }
+
+  function pickHint(p, s) {
+    const cs = candidates(p, s);
+    if (cs.length === 1 && cs[0].kind === 'place') return cs[0];
+    let best = bestOf(p, s, cs);
+    // 中低難度的步驟往後推都找不到貓：加入逐格試放與 4 包 4，一起比
+    if (!best || best.key[0] === Infinity) {
+      const more = unitTrials(p, s);
+      confinement(p, s, analyze(p, s), 4, more);
+      const alt = bestOf(p, s, more);
+      if (alt && (!best || lexLess(alt.key, best.key))) best = alt;
+    }
+    if (best) {
+      const next = best.t && firstSingle(p, best.t);
+      if (!next) return best.c;
+      return { ...best.c, reason: best.c.reason.concat(['\n🎯 套用後：', { unit: next.unit }, ' 只剩 ', { cell: next.cell }, ' 一格，可以放貓了！']) };
+    }
+    const info = analyze(p, s);
+    return hypothesis(p, s, false) || hypothesis(p, s, true) || reveal(p, s, info);
+  }
+
+  function nextHint(p, state) {
+    const chk = precheck(p, state);
+    if (chk) return chk;
+    const { s, pre } = crossAround(p, state);
+    const h = pickHint(p, s);
+    if (!pre.length) return h;
+    // pre：套用時先打叉的格子（已放貓的周圍）；說明最後補一句
+    return { ...h, pre, reason: h.reason.concat([`\n（已順便把貓咪周圍不能放的 ${pre.length} 格打叉）`]) };
+  }
+
   // 套用提示，回傳新的 state；autoCross 為 true 時放貓會自動排除周圍
   function applyHint(p, state, h, autoCross) {
     const s = Array.from(state);
+    if (h.pre) for (const i of h.pre) if (s[i] === EMPTY) s[i] = CROSS;
     if (h.kind === 'place') {
       for (const i of h.cells) {
         s[i] = CAT;
@@ -482,7 +646,7 @@
     return out;
   }
 
-  const api = { EMPTY, CROSS, CAT, validate, create, solve, nextHint, applyHint, TYPE_NAME };
+  const api = { EMPTY, CROSS, CAT, validate, create, solve, nextHint, nextHintByLevel, applyHint, TYPE_NAME };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.QueensEngine = api;
 })(typeof window !== 'undefined' ? window : globalThis);

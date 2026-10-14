@@ -2,7 +2,7 @@
  * Service Worker：離線快取 + 接收 Android 分享選單送來的截圖
  * 更新網站內容時，把 VERSION 加 1，使用者下次開啟就會換成新版。
  */
-const VERSION = 2;
+const VERSION = 3;
 const CACHE = `cat-solver-v${VERSION}`;
 const ASSETS = [
   './',
